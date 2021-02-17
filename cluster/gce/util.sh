@@ -1126,6 +1126,7 @@ function build-linux-kube-env {
 
   rm -f "$file"
   cat >"$file" <<EOF
+TXC_CUSTOMIZE_DOCKER: $(yaml-quote "${TXC_CUSTOMIZE_DOCKER}")
 CLUSTER_NAME: $(yaml-quote "${CLUSTER_NAME}")
 ENV_TIMESTAMP: $(yaml-quote "$(date -u +%Y-%m-%dT%T%z)")
 INSTANCE_PREFIX: $(yaml-quote "${INSTANCE_PREFIX}")

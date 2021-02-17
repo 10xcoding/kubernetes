@@ -416,6 +416,56 @@ function load-docker-images {
   fi
 }
 
+# 10xCoding customization hook for setting up devicemapper driver on Local SSD.
+function 10x-customize-docker {
+  # Only do the devicemapper setup on nodes, not the master.
+  if [[ "${KUBERNETES_MASTER:-}" == "false" ]]; then
+    apt-get install -y --no-install-recommends \
+      pigz \
+      lvm2 \
+      thin-provisioning-tools
+
+    LVM_DEVICE="/dev/disk/by-id/google-local-nvme-ssd-0"
+    pvcreate "${LVM_DEVICE}"
+    vgcreate docker "${LVM_DEVICE}"
+
+    # Create one volume for docker image downloads and two for docker's thinpool.
+    # The Local SSD is 375GB. We give 15% (~56GB) for downloading images and the
+    # rest (~300GB) to docker's devicemapper thinpool storage.
+    lvcreate --wipesignatures y -n images docker -l 15%VG
+    # Mount a tmp volume on the local SSD to hold downloaded container images:
+    mkfs.ext4 /dev/docker/images
+    mkdir -p /var/lib/docker/tmp
+    mount -o discard,defaults,nobarrier /dev/docker/images /var/lib/docker/tmp
+
+    # Create two volumes for docker's thinpool and join them:
+    lvcreate --wipesignatures y -n thinpool docker -l 80%VG
+    lvcreate --wipesignatures y -n thinpoolmeta docker -l 1%VG
+    lvconvert -y \
+      --zero n \
+      -c 512K \
+      --thinpool docker/thinpool \
+      --poolmetadata docker/thinpoolmeta
+
+    mkdir -p /etc/docker
+    echo -e \
+      '{\n'\
+      '  "storage-driver": "devicemapper",\n'\
+      '  "storage-opts": [\n'\
+      '    "dm.thinpooldev=/dev/mapper/docker-thinpool",\n'\
+      '    "dm.use_deferred_removal=true",\n'\
+      '    "dm.use_deferred_deletion=true",\n'\
+      '    "dm.basesize=200G"\n'\
+      '  ]\n'\
+      '}\n'\
+      > /etc/docker/daemon.json
+  fi
+
+  # On the master we still install the same version of docker:
+  apt-get install -y --no-install-recommends \
+    docker.io=19.03.6-0ubuntu1~18.04.3
+}
+
 # If we are on ubuntu we can try to install docker
 function install-docker {
   # bailout if we are not on ubuntu
@@ -435,6 +485,13 @@ function install-docker {
     gnupg2 \
     software-properties-common \
     lsb-release
+
+  # 10xCoding customization hook:
+  if [[ "${TXC_CUSTOMIZE_DOCKER:-}" == "true" ]]; then
+    customize-docker
+    rm -rf /var/lib/apt/lists/*
+    return
+  fi
 
   release=$(lsb_release -cs)
 
